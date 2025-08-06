@@ -12,6 +12,6 @@ select
   count(distinct visitor_id) as total_users
 from `sdp-sandbox-nowtv-int.SGL18.EDITORIAL_DASHBOARD_REVAMP_RAW_TABLE`
 where entry_app_section is not null
-and entry_app_section not in ('live-tv')
+--and entry_app_section not in ('live-tv')
 group by 1,2,3,4
 order by 1,2,3,4
