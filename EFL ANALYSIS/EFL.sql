@@ -24,7 +24,7 @@ WHERE COUNTRY_CODE = 'UK'
         ,PC_NUT1
         ,NUT1_NAME
 		    ,PC_NUT2
-        ,NUT2_NAME
+        --,NUT2_NAME
 		    ,PC_NUT3
         ,NUT3_NAME
         ,DATE_TRUNC(VIEWING_DATE, WEEK(MONDAY)) AS week_start_date
