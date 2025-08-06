@@ -1,0 +1,262 @@
+/*
+____VIEWING METRICS____
+*/
+create or replace table `sdp-sandbox-nowtv-int.JAR39.sports_viewing_metrics_summary` as (
+/*
+___________________________LINEAR VIEWING___________________________________________________________
+*/
+--GET ALL VIEWING DATA FROM VADES AND JOIN TO REGIONAL DATA
+WITH VIEWING AS (
+SELECT
+        SPN.*
+        ,V.VIEWING_DATE
+        ,V.TITLE
+        ,V.SUBGENRE
+        ,V.CAPPED_VIEWING_DURATION
+FROM `sdp-sandbox-nowtv-prod.DATAMARTS.VADES` V INNER JOIN `sdp-sandbox-nowtv-int.JWN43.Nuts_Sports_Custs`SPN 
+ON V.PROFILE_ID = SPN.PROFILE_ID
+  AND V.VIEWING_DATE BETWEEN DATE(SPN.effective_from) AND DATE(SPN.effective_to)
+WHERE COUNTRY_CODE = 'UK'
+  AND VIEWING_DATE BETWEEN '2023-01-01' AND CURRENT_DATE()
+  AND PRODUCT = "SPORTS"
+  AND VIEWING_SCENARIO = 'LIVE'
+),
+
+ENGAGEMENT_USER1 AS (
+  SELECT
+        PROFILE_ID
+        ,PC_NUT1
+        ,NUT1_NAME
+		,PC_NUT2
+        ,NUT2_NAME
+		,PC_NUT3
+        ,NUT3_NAME
+        ,DATE_TRUNC(VIEWING_DATE, WEEK(MONDAY)) AS week_start_date
+        -- ,EXTRACT(WEEK FROM DATE_SUB(VIEWING_DATE, INTERVAL 1 day)) AS week_num
+        ,CASE
+            WHEN SUBGENRE like '%cricket%' AND CAPPED_VIEWING_DURATION>= 180 then 'Cricket' 
+            WHEN SUBGENRE like '%tennis%' AND CAPPED_VIEWING_DURATION>= 180 then 'Tennis'
+            WHEN SUBGENRE like '%golf%' AND CAPPED_VIEWING_DURATION>= 180 then 'Golf'
+            WHEN SUBGENRE like '%football%' AND CAPPED_VIEWING_DURATION>= 180 then 'Football'
+            WHEN SUBGENRE like '%motor sport%' AND (lower(title) like '%formula%' OR lower(title) like '%f1%' OR lower(title) like '%live formula%') AND CAPPED_VIEWING_DURATION>= 180 THEN 'F1'
+            WHEN SUBGENRE like '%darts%' AND CAPPED_VIEWING_DURATION>= 180 then 'Darts'
+            WHEN (SUBGENRE like '%rugby league%' or subgenre = 'rugby' or subgenre = 'rugby union') AND CAPPED_VIEWING_DURATION>= 180 then 'Rugby'
+            ELSE 'Other'
+          END AS SPORTS_TYPE
+        ,COUNT(DISTINCT VIEWING_DATE) AS FREQUENCY
+        ,COUNT(DISTINCT TITLE) AS REPERTOIRE_TITLE
+  FROM VIEWING
+  GROUP BY ALL
+),
+
+ENGAGEMENT_USER2 AS (
+  SELECT
+        PROFILE_ID
+        ,PC_NUT1
+        ,NUT1_NAME
+		,PC_NUT2
+        ,NUT2_NAME
+		,PC_NUT3
+        ,NUT3_NAME
+        ,DATE_TRUNC(VIEWING_DATE, WEEK(MONDAY)) AS week_start_date
+        ,'All' AS SPORTS_TYPE
+        -- ,EXTRACT(WEEK FROM DATE_SUB(VIEWING_DATE, INTERVAL 1 day)) AS week_num
+        ,COUNT(DISTINCT VIEWING_DATE) AS FREQUENCY
+        ,COUNT(DISTINCT TITLE) AS REPERTOIRE_TITLE
+
+  FROM VIEWING
+    WHERE CAPPED_VIEWING_DURATION>= 180
+  GROUP BY ALL
+),
+
+ENGAGEMENT_USER3 AS (
+
+SELECT 
+	VIEWING.PROFILE_ID
+	,SPN.pc_Nut1 PC_NUT1
+	,SPN.nut1_name NUT1_NAME
+	,SPN.pc_Nut2 PC_NUT2
+	,SPN.nut2_name NUT2_NAME
+	,SPN.pc_Nut3 PC_NUT3
+	,SPN.nut3_name NUT3_NAME
+	,DATE_TRUNC(REPORT_DAY, WEEK(MONDAY)) AS week_start_date
+	,'No Content Watched' SPORTS_TYPE
+	,COUNT(DISTINCT A.PROFILE_ID) AS ACTIVE_BASE 
+	,NULL AS REPERTOIRE_TITLE
+FROM (SELECT
+  REPORT_DAY
+  ,PROFILE_ID
+FROM `sdp-sandbox-nowtv-prod.SDP_NOWTV_DI_VIEWS.BFTM3_ALL_LEVELS_STAGE4`
+WHERE REPORT_DAY BETWEEN '2023-01-01' AND CURRENT_DATE()
+  AND REPORTING_PRODUCT_TYPE = 'PRODUCT'
+  AND PRODUCT = 'SPORTS'
+  AND CUST_PRODUCT_STATUS in ('Active', 'Pending Cancellation')
+ AND ACCOUNT_TYPE = 'PS'
+  AND COUNTRY_CODE = 'UK'
+GROUP BY ALL) A INNER JOIN `sdp-sandbox-nowtv-int.JWN43.Nuts_Sports_Custs` SPN
+ON SPN.PROFILE_ID = A.PROFILE_ID AND A.REPORT_DAY BETWEEN DATE(SPN.EFFECTIVE_FROM) AND DATE(SPN.EFFECTIVE_TO)
+LEFT JOIN (SELECT
+        V.profile_ID
+        ,V.VIEWING_DATE      
+FROM `sdp-sandbox-nowtv-prod.DATAMARTS.VADES` V 
+WHERE COUNTRY_CODE = 'UK'
+  AND VIEWING_DATE BETWEEN '2023-01-01' AND CURRENT_DATE()
+  AND PRODUCT = "SPORTS"
+  AND VIEWING_SCENARIO = 'LIVE') VIEWING ON  VIEWING.PROFILE_id = a.PROFILE_ID  AND VIEWING.VIEWING_DATE = REPORT_DAY
+WHERE VIEWING.PROFILE_ID IS NULL
+GROUP BY ALL
+ORDER BY 1
+
+),
+
+ENGAGEMENT AS(
+  SELECT 
+        PC_NUT1 as pc_Nut1
+		,PC_NUT2 as pc_Nut2
+		,PC_NUT3 as pc_Nut3
+        ,NUT1_name as nut1_name
+		,NUT2_name as nut2_name
+		,NUT3_name as nut3_name
+        ,week_start_date as wk_start_date
+        ,EXTRACT(WEEK FROM week_start_date) AS week_num
+        ,AVG(FREQUENCY) AS average_frequency
+        ,AVG(REPERTOIRE_TITLE) AS average_repertoire
+        ,NULL AS REPERTOIRE_CHANNEL_SERVICE_KEY
+        ,COUNT(DISTINCT PROFILE_ID) AS user_count
+        ,sports_type
+  FROM 
+  ((SELECT * FROM ENGAGEMENT_USER1) UNION ALL (SELECT * FROM ENGAGEMENT_USER2) UNION ALL (SELECT * FROM ENGAGEMENT_USER3)) 
+  GROUP BY ALL
+),
+
+-- SELECT * FROM ENGAGEMENT WHERE  NUT1_name = 'London' and ENGAGEMENT.week_start_date = '2024-01-01'
+
+
+
+
+
+
+/*
+___________________________BONUS STREAMS___________________________________________________________
+*/
+
+--EXTRACT BONUS STREAM ACTIVITY
+BS AS (
+  SELECT PROFILE_ID
+      ,VIEWING_DATE
+      ,FIRST_EVENT_START_DTTM
+      ,LAST_EVENT_END_DTTM
+      ,TITLE
+      ,TITLE2
+      ,CHANNEL_SERVICE_KEY
+      ,CAPPED_VIEWING_DURATION
+      ,PRODUCT
+      ,COUNTRY_CODE
+      ,'SS+' AS TAG
+  FROM `sdp-sandbox-nowtv-int.PROJECT_CHILE_REPORTING.VIEWING_DATA_STG_UK_TBL`
+  WHERE COUNTRY_CODE = 'UK'
+  AND DAY > '2023-01-01'
+  AND ((SAFE_CAST(CHANNEL_SERVICE_KEY AS INT64) BETWEEN 6401 AND 6500)
+    OR (SAFE_CAST(CHANNEL_SERVICE_KEY AS INT64) BETWEEN 7801 AND 7900)
+    OR SAFE_CAST(CHANNEL_SERVICE_KEY AS STRING) LIKE '7%')
+  AND SAFE_CAST(CHANNEL_SERVICE_KEY AS INT64) NOT IN (7201, 7202, 7221)
+  AND LENGTH(SAFE_CAST(CHANNEL_SERVICE_KEY AS STRING)) = 4
+  AND VIEWING_SCENARIO = 'LIVE'
+  AND TITLE2 NOT IN (
+    'LANDO NORRIS',
+    'MAX VERSTAPPEN',
+    'MULTI SCREEN: TEAM RADIO',
+    'LEWIS HAMILTON',
+    'TIMING SCREEN',
+    'DRIVER TRACKER',
+    'ONBOARD MIX',
+    'OSCAR PIASTRI',
+    'CHARLES LECLERC',
+    'GEORGE RUSSELL',
+    'SERGIO PEREZ',
+    'CARLOS SAINZ',
+    'MULTI SCREEN & TEAM RADIO',
+    'FERNANDO ALONSO',
+    'YUKI TSUNODA',
+    'BATTLE CHANNEL',
+    'DANIEL RICCIARDO',
+    'LIAM LAWSON',
+    'LANCE STROLL',
+    'ALEXANDER ALBON',
+    'FRANCO COLAPINTO',
+    'PIERRE GASLY',
+    'OLIVER BEARMAN',
+    'F1 KIDS',
+    'NICO HULKENBERG',
+    'LOGAN SARGEANT',
+    'KEVIN MAGNUSSEN',
+    'ZHOU GUANYU',
+    'VALTTERI BOTTAS'
+)
+--AND TITLE2 LIKE '% V %'
+AND VIEWING_EVENT_COUNT > 0
+),
+
+--JOIN TO REGIONAL DATA
+CTE2 AS (
+  SELECT 
+    SPN.*
+    ,BS.VIEWING_DATE
+    ,BS.TITLE
+    ,BS.TITLE2
+    ,BS.CHANNEL_SERVICE_KEY
+    ,BS.CAPPED_VIEWING_DURATION
+  FROM `sdp-sandbox-nowtv-int.JWN43.Nuts_Sports_Custs` SPN INNER JOIN BS 
+  ON SPN.PROFILE_ID = BS.PROFILE_ID
+    AND BS.VIEWING_DATE BETWEEN DATE(SPN.effective_from) AND DATE(SPN.effective_to)
+),
+
+-- 
+---FIND ENGAGMENT PER USER
+ENGAGEMENT_USER_BS AS(
+  SELECT
+        PROFILE_ID
+        ,pc_Nut1
+        ,nut1_name
+		,pc_Nut2
+        ,nut2_name
+		,pc_Nut3
+        ,nut3_name
+        ,DATE_TRUNC(VIEWING_DATE, WEEK(MONDAY)) AS week_start_date
+        ,EXTRACT(WEEK FROM DATE_SUB(VIEWING_DATE, INTERVAL 1 day)) AS week_num
+        ,COUNT(DISTINCT VIEWING_DATE) AS FREQUENCY
+        ,COUNT(DISTINCT TITLE2) AS REPERTOIRE_TITLE
+        ,COUNT(DISTINCT CHANNEL_SERVICE_KEY) AS REPERTOIRE_CHANNEL_SERVICE_KEY
+        -- ,COUNT(*) AS INITIATIONS
+  FROM CTE2
+  WHERE CAPPED_VIEWING_DURATION >=180
+  GROUP BY ALL
+),
+
+
+--AVG ENGAGMENT ACROSS USERS 
+ENGAGEMENT_BS AS(
+  SELECT
+        PC_NUT1 as pc_Nut1
+        ,NUT1_name as nut1_name
+		,PC_NUT2 as pc_Nut2
+        ,NUT2_name as nut2_name
+		,PC_NUT3 as pc_Nut3
+        ,NUT3_name as nut3_name
+        ,week_start_date as wk_start_date
+        ,EXTRACT(WEEK FROM week_start_date) AS week_num
+        ,AVG(FREQUENCY) AS average_frequency
+        ,AVG(REPERTOIRE_TITLE) AS average_repertoire
+        ,AVG(REPERTOIRE_CHANNEL_SERVICE_KEY) AS REPERTOIRE_CHANNEL_SERVICE_KEY
+        -- ,AVG(INITIATIONS) AS INITIATIONS
+        ,COUNT(DISTINCT PROFILE_ID) AS user_count
+        ,'Sky Sports+' as sports_type
+  FROM ENGAGEMENT_USER_BS
+  GROUP BY ALL
+)
+
+SELECT * FROM 
+(
+(SELECT * FROM ENGAGEMENT) UNION ALL (SELECT * FROM ENGAGEMENT_BS)) 
+)
+;
